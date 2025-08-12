@@ -16,6 +16,16 @@ type TableData struct {
 	Options TableOptions    `json:"options,omitempty"`
 }
 
+// DatabasePaginatedData represents data for database-level pagination
+// This is more efficient as it only contains the current page data
+type DatabasePaginatedData struct {
+	Headers    []string        `json:"headers"`
+	Rows       [][]interface{} `json:"rows"`
+	Data       interface{}     `json:"data,omitempty"` // Current page data only
+	TotalCount int             `json:"total_count"`    // Total number of records in database
+	Options    TableOptions    `json:"options,omitempty"`
+}
+
 // TableOptions holds configuration for table rendering
 type TableOptions struct {
 	CSSClass   string      `json:"css_class,omitempty"`
@@ -37,6 +47,7 @@ type Pagination struct {
 	BaseURL       string `json:"base_url,omitempty"`       // Base URL for pagination links
 	QueryParam    string `json:"query_param,omitempty"`    // Query parameter name for page (default: "page")
 	PreserveQuery bool   `json:"preserve_query,omitempty"` // Whether to preserve other query parameters
+	TotalCount    int    `json:"total_count,omitempty"`    // Total records (for database pagination)
 }
 
 // Renderer is the main struct for rendering tables
@@ -70,6 +81,52 @@ func (r *Renderer) calculatePagination(totalRows int, pagination *Pagination) Pa
 			StartRow:    1,
 			EndRow:      totalRows,
 		}
+	}
+
+	currentPage := pagination.CurrentPage
+	if currentPage < 1 {
+		currentPage = 1
+	}
+
+	totalPages := (totalRows + pagination.PageSize - 1) / pagination.PageSize
+	if currentPage > totalPages {
+		currentPage = totalPages
+	}
+
+	startRow := (currentPage-1)*pagination.PageSize + 1
+	endRow := currentPage * pagination.PageSize
+	if endRow > totalRows {
+		endRow = totalRows
+	}
+
+	return PaginationInfo{
+		CurrentPage: currentPage,
+		TotalPages:  totalPages,
+		TotalRows:   totalRows,
+		PageSize:    pagination.PageSize,
+		StartRow:    startRow,
+		EndRow:      endRow,
+	}
+}
+
+// calculateDatabasePagination calculates pagination for database-level pagination
+// where we know the total count but only have current page data
+func (r *Renderer) calculateDatabasePagination(currentPageDataCount int, pagination *Pagination) PaginationInfo {
+	if pagination == nil || !pagination.Enabled || pagination.PageSize <= 0 {
+		return PaginationInfo{
+			CurrentPage: 1,
+			TotalPages:  1,
+			TotalRows:   currentPageDataCount,
+			PageSize:    currentPageDataCount,
+			StartRow:    1,
+			EndRow:      currentPageDataCount,
+		}
+	}
+
+	// Use TotalCount from pagination config for database pagination
+	totalRows := pagination.TotalCount
+	if totalRows == 0 {
+		totalRows = currentPageDataCount
 	}
 
 	currentPage := pagination.CurrentPage
@@ -304,7 +361,7 @@ func (r *Renderer) RenderHTML(data TableData) (string, error) {
 		// Use traditional Headers and Rows fields
 		headers = data.Headers
 		rows = data.Rows
-	}
+	} 
 
 	// Calculate pagination info
 	totalRows := len(rows)
@@ -393,6 +450,132 @@ func (r *Renderer) RenderHTML(data TableData) (string, error) {
 		PaginationInfo:         template.HTML(paginationInfoHTML),
 		ShowPaginationControls: showPaginationControls,
 		ShowPaginationInfo:     showPaginationInfo,
+	}
+
+	var result strings.Builder
+	err = tmpl.Execute(&result, templateData)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	// Wrap in responsive div if needed
+	if data.Options.Responsive {
+		return fmt.Sprintf(`<div class="table-responsive">%s</div>`, result.String()), nil
+	}
+
+	return result.String(), nil
+}
+
+// RenderDatabasePaginatedHTML renders table data with database-level pagination
+// This method expects only the current page data and uses TotalCount from pagination config
+func (r *Renderer) RenderDatabasePaginatedHTML(data DatabasePaginatedData) (string, error) {
+	var headers []string
+	var rows [][]interface{}
+	var err error
+
+	// If Data field is provided (struct slice), use it and auto-generate headers/rows
+	if data.Data != nil {
+		headers, rows, err = convertStructSliceToRows(data.Data)
+		if err != nil {
+			return "", fmt.Errorf("failed to convert struct data: %w", err)
+		}
+		// Override with manual headers if provided
+		if len(data.Headers) > 0 {
+			headers = data.Headers
+		}
+	} else {
+		// Use traditional Headers and Rows fields
+		headers = data.Headers
+		rows = data.Rows
+	}
+
+	// Calculate pagination info using database pagination method
+	currentPageDataCount := len(rows)
+	paginationInfo := r.calculateDatabasePagination(currentPageDataCount, data.Options.Pagination)
+
+	// For database pagination, we don't paginate the rows (they're already paginated)
+	// We use the rows as-is since they represent only the current page
+
+	// Build CSS classes
+	cssClasses := []string{"table"}
+
+	if data.Options.CSSClass != "" {
+		cssClasses = append(cssClasses, data.Options.CSSClass)
+	}
+	if data.Options.Striped {
+		cssClasses = append(cssClasses, "table-striped")
+	}
+	if data.Options.Bordered {
+		cssClasses = append(cssClasses, "table-bordered")
+	}
+
+	// Enhanced HTML template with pagination support
+	htmlTemplate := `
+<div class="table-container">
+{{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}
+<table class="{{.CSSClasses}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Style}} style="{{.Style}}"{{end}}>
+	<thead>
+		<tr>
+			{{range .Headers}}
+			<th>{{.}}</th>
+			{{end}}
+		</tr>
+	</thead>
+	<tbody>
+		{{range .Rows}}
+		<tr>
+			{{range .}}
+			<td>{{.}}</td>
+			{{end}}
+		</tr>
+		{{end}}
+	</tbody>
+</table>
+{{if .ShowPaginationControls}}{{.PaginationControls}}{{end}}
+</div>`
+
+	tmpl, err := template.New("table").Parse(htmlTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	// Generate pagination HTML
+	var paginationControls, paginationInfoHTML string
+	var showPaginationControls, showPaginationInfo bool
+	
+	if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
+		showPaginationControls = data.Options.Pagination.ShowControls
+		showPaginationInfo = data.Options.Pagination.ShowInfo
+		
+		if showPaginationControls {
+			paginationControls = r.generatePaginationHTML(paginationInfo, data.Options.Pagination)
+		}
+		if showPaginationInfo {
+			paginationInfoHTML = r.generatePaginationInfoHTML(paginationInfo)
+		}
+	}
+
+	// Prepare template data
+	templateData := struct {
+		Headers               []string
+		Rows                  [][]interface{}
+		CSSClasses           string
+		ID                   string
+		Style                template.CSS
+		PaginationControls   template.HTML
+		PaginationInfo       template.HTML
+		ShowPaginationControls bool
+		ShowPaginationInfo   bool
+	}{
+		Headers:               headers,
+		Rows:                  rows, // Use rows as-is (already paginated at database level)
+		CSSClasses:           strings.Join(cssClasses, " "),
+		ID:                   data.Options.ID,
+		Style:                template.CSS(data.Options.Style),
+		PaginationControls:   template.HTML(paginationControls),
+		PaginationInfo:       template.HTML(paginationInfoHTML),
+		ShowPaginationControls: showPaginationControls,
+		ShowPaginationInfo:   showPaginationInfo,
 	}
 
 	var result strings.Builder
@@ -555,7 +738,7 @@ func ParsePageFromQuery(queryString string, paramName string) int {
 // CreatePaginatedData creates TableData with pagination based on URL query
 func CreatePaginatedData(data interface{}, baseURL string, queryString string, pageSize int) TableData {
 	currentPage := ParsePageFromQuery(queryString, "page")
-
+	
 	return TableData{
 		Data: data,
 		Options: TableOptions{
@@ -574,4 +757,46 @@ func CreatePaginatedData(data interface{}, baseURL string, queryString string, p
 			},
 		},
 	}
+}
+
+// CreateDatabasePaginatedData creates DatabasePaginatedData for database-level pagination
+func CreateDatabasePaginatedData(data interface{}, totalCount int, baseURL string, queryString string, pageSize int) DatabasePaginatedData {
+	currentPage := ParsePageFromQuery(queryString, "page")
+	
+	return DatabasePaginatedData{
+		Data:       data, // Only current page data
+		TotalCount: totalCount,
+		Options: TableOptions{
+			Responsive: true,
+			Striped:    true,
+			Bordered:   true,
+			Pagination: &Pagination{
+				Enabled:       true,
+				PageSize:      pageSize,
+				CurrentPage:   currentPage,
+				ShowControls:  true,
+				ShowInfo:      true,
+				BaseURL:       baseURL,
+				QueryParam:    "page",
+				PreserveQuery: true,
+				TotalCount:    totalCount, // Important: set total count for database pagination
+			},
+		},
+	}
+}
+
+// CalculateDatabaseOffset calculates OFFSET for database queries
+func CalculateDatabaseOffset(page int, pageSize int) int {
+	if page < 1 {
+		page = 1
+	}
+	return (page - 1) * pageSize
+}
+
+// CalculateDatabaseLimit returns the LIMIT for database queries (same as page size)
+func CalculateDatabaseLimit(pageSize int) int {
+	if pageSize <= 0 {
+		return 10 // default page size
+	}
+	return pageSize
 }
