@@ -35,6 +35,7 @@ type TableOptions struct {
 	Responsive bool        `json:"responsive,omitempty"`
 	Style      string      `json:"style,omitempty"`
 	Pagination *Pagination `json:"pagination,omitempty"`
+	Sorting    *Sorting    `json:"sorting,omitempty"`
 }
 
 // Pagination holds pagination configuration
@@ -48,6 +49,16 @@ type Pagination struct {
 	QueryParam    string `json:"query_param,omitempty"`    // Query parameter name for page (default: "page")
 	PreserveQuery bool   `json:"preserve_query,omitempty"` // Whether to preserve other query parameters
 	TotalCount    int    `json:"total_count,omitempty"`    // Total records (for database pagination)
+}
+
+// Sorting holds sorting configuration for server-side sorting
+type Sorting struct {
+	Enabled     bool   `json:"enabled"`
+	SortBy      string `json:"sort_by,omitempty"`      // Field name to sort by
+	SortOrder   string `json:"sort_order,omitempty"`   // "asc" or "desc"
+	BaseURL     string `json:"base_url,omitempty"`     // Base URL for sorting links
+	QueryParam  string `json:"query_param,omitempty"`  // Query parameter name for sort (default: "sort_by")
+	OrderParam  string `json:"order_param,omitempty"`  // Query parameter name for order (default: "sort_order")
 }
 
 // Renderer is the main struct for rendering tables
@@ -70,48 +81,9 @@ type PaginationInfo struct {
 	EndRow      int
 }
 
-// calculatePagination calculates pagination information
-func (r *Renderer) calculatePagination(totalRows int, pagination *Pagination) PaginationInfo {
-	if pagination == nil || !pagination.Enabled || pagination.PageSize <= 0 {
-		return PaginationInfo{
-			CurrentPage: 1,
-			TotalPages:  1,
-			TotalRows:   totalRows,
-			PageSize:    totalRows,
-			StartRow:    1,
-			EndRow:      totalRows,
-		}
-	}
-
-	currentPage := pagination.CurrentPage
-	if currentPage < 1 {
-		currentPage = 1
-	}
-
-	totalPages := (totalRows + pagination.PageSize - 1) / pagination.PageSize
-	if currentPage > totalPages {
-		currentPage = totalPages
-	}
-
-	startRow := (currentPage-1)*pagination.PageSize + 1
-	endRow := currentPage * pagination.PageSize
-	if endRow > totalRows {
-		endRow = totalRows
-	}
-
-	return PaginationInfo{
-		CurrentPage: currentPage,
-		TotalPages:  totalPages,
-		TotalRows:   totalRows,
-		PageSize:    pagination.PageSize,
-		StartRow:    startRow,
-		EndRow:      endRow,
-	}
-}
-
-// calculateDatabasePagination calculates pagination for database-level pagination
+// calculatePagination calculates pagination for database-level pagination
 // where we know the total count but only have current page data
-func (r *Renderer) calculateDatabasePagination(currentPageDataCount int, pagination *Pagination) PaginationInfo {
+func (r *Renderer) calculatePagination(currentPageDataCount int, pagination *Pagination) PaginationInfo {
 	if pagination == nil || !pagination.Enabled || pagination.PageSize <= 0 {
 		return PaginationInfo{
 			CurrentPage: 1,
@@ -155,31 +127,8 @@ func (r *Renderer) calculateDatabasePagination(currentPageDataCount int, paginat
 	}
 }
 
-// paginateRows returns the rows for the current page
-func (r *Renderer) paginateRows(rows [][]interface{}, pagination *Pagination) [][]interface{} {
-	if pagination == nil || !pagination.Enabled || pagination.PageSize <= 0 {
-		return rows
-	}
-
-	totalRows := len(rows)
-	paginationInfo := r.calculatePagination(totalRows, pagination)
-
-	startIndex := paginationInfo.StartRow - 1
-	endIndex := paginationInfo.EndRow
-
-	if startIndex >= totalRows {
-		return [][]interface{}{}
-	}
-
-	if endIndex > totalRows {
-		endIndex = totalRows
-	}
-
-	return rows[startIndex:endIndex]
-}
-
 // generatePaginationHTML generates HTML for pagination controls
-func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, pagination *Pagination) string {
+func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, pagination *Pagination, currentQueryParams map[string]string) string {
 	if paginationInfo.TotalPages <= 1 {
 		return ""
 	}
@@ -194,15 +143,29 @@ func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, paginat
 		queryParam = "page"
 	}
 
-	// Helper function to generate URL for a page
+	// Helper function to generate URL for a page while preserving other query parameters
 	generateURL := func(page int) string {
+		params := make([]string, 0)
+		
+		// Add page parameter
+		params = append(params, fmt.Sprintf("%s=%d", queryParam, page))
+		
+		// Add other preserved parameters (like sorting)
+		for key, value := range currentQueryParams {
+			if key != queryParam { // Don't duplicate page param
+				params = append(params, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+		
+		queryString := strings.Join(params, "&")
+		
 		if baseURL == "" {
-			return fmt.Sprintf("?%s=%d", queryParam, page)
+			return "?" + queryString
 		}
 		if strings.Contains(baseURL, "?") {
-			return fmt.Sprintf("%s&%s=%d", baseURL, queryParam, page)
+			return baseURL + "&" + queryString
 		}
-		return fmt.Sprintf("%s?%s=%d", baseURL, queryParam, page)
+		return baseURL + "?" + queryString
 	}
 
 	var html strings.Builder
@@ -340,135 +303,9 @@ func convertStructSliceToRows(data interface{}) ([]string, [][]interface{}, erro
 	return headers, rows, nil
 }
 
-// RenderHTML renders table data as HTML string
-func (r *Renderer) RenderHTML(data TableData) (string, error) {
-
-	var headers []string
-	var rows [][]interface{}
-	var err error
-
-	// If Data field is provided (struct slice), use it and auto-generate headers/rows
-	if data.Data != nil {
-		headers, rows, err = convertStructSliceToRows(data.Data)
-		if err != nil {
-			return "", fmt.Errorf("failed to convert struct data: %w", err)
-		}
-		// Override with manual headers if provided
-		if len(data.Headers) > 0 {
-			headers = data.Headers
-		}
-	} else {
-		// Use traditional Headers and Rows fields
-		headers = data.Headers
-		rows = data.Rows
-	} 
-
-	// Calculate pagination info
-	totalRows := len(rows)
-	paginationInfo := r.calculatePagination(totalRows, data.Options.Pagination)
-
-	// Apply pagination to rows
-	paginatedRows := r.paginateRows(rows, data.Options.Pagination)
-
-	// Build CSS classes
-	cssClasses := []string{"table"}
-
-	if data.Options.CSSClass != "" {
-		cssClasses = append(cssClasses, data.Options.CSSClass)
-	}
-	if data.Options.Striped {
-		cssClasses = append(cssClasses, "table-striped")
-	}
-	if data.Options.Bordered {
-		cssClasses = append(cssClasses, "table-bordered")
-	}
-
-	// Enhanced HTML template with pagination support
-	htmlTemplate := `
-<div class="table-container">
-{{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}
-<table class="{{.CSSClasses}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Style}} style="{{.Style}}"{{end}}>
-	<thead>
-		<tr>
-			{{range .Headers}}
-			<th>{{.}}</th>
-			{{end}}
-		</tr>
-	</thead>
-	<tbody>
-		{{range .Rows}}
-		<tr>
-			{{range .}}
-			<td>{{.}}</td>
-			{{end}}
-		</tr>
-		{{end}}
-	</tbody>
-</table>
-{{if .ShowPaginationControls}}{{.PaginationControls}}{{end}}
-</div>`
-
-	tmpl, err := template.New("table").Parse(htmlTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	// Generate pagination HTML
-	var paginationControls, paginationInfoHTML string
-	var showPaginationControls, showPaginationInfo bool
-
-	if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
-		showPaginationControls = data.Options.Pagination.ShowControls
-		showPaginationInfo = data.Options.Pagination.ShowInfo
-
-		if showPaginationControls {
-			paginationControls = r.generatePaginationHTML(paginationInfo, data.Options.Pagination)
-		}
-		if showPaginationInfo {
-			paginationInfoHTML = r.generatePaginationInfoHTML(paginationInfo)
-		}
-	}
-
-	// Prepare template data
-	templateData := struct {
-		Headers                []string
-		Rows                   [][]interface{}
-		CSSClasses             string
-		ID                     string
-		Style                  template.CSS
-		PaginationControls     template.HTML
-		PaginationInfo         template.HTML
-		ShowPaginationControls bool
-		ShowPaginationInfo     bool
-	}{
-		Headers:                headers,
-		Rows:                   paginatedRows,
-		CSSClasses:             strings.Join(cssClasses, " "),
-		ID:                     data.Options.ID,
-		Style:                  template.CSS(data.Options.Style),
-		PaginationControls:     template.HTML(paginationControls),
-		PaginationInfo:         template.HTML(paginationInfoHTML),
-		ShowPaginationControls: showPaginationControls,
-		ShowPaginationInfo:     showPaginationInfo,
-	}
-
-	var result strings.Builder
-	err = tmpl.Execute(&result, templateData)
-	if err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	// Wrap in responsive div if needed
-	if data.Options.Responsive {
-		return fmt.Sprintf(`<div class="table-responsive">%s</div>`, result.String()), nil
-	}
-
-	return result.String(), nil
-}
-
-// RenderDatabasePaginatedHTML renders table data with database-level pagination
+// RenderHTML renders table data with database-level pagination
 // This method expects only the current page data and uses TotalCount from pagination config
-func (r *Renderer) RenderDatabasePaginatedHTML(data DatabasePaginatedData) (string, error) {
+func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 	var headers []string
 	var rows [][]interface{}
 	var err error
@@ -491,7 +328,7 @@ func (r *Renderer) RenderDatabasePaginatedHTML(data DatabasePaginatedData) (stri
 
 	// Calculate pagination info using database pagination method
 	currentPageDataCount := len(rows)
-	paginationInfo := r.calculateDatabasePagination(currentPageDataCount, data.Options.Pagination)
+	paginationInfo := r.calculatePagination(currentPageDataCount, data.Options.Pagination)
 
 	// For database pagination, we don't paginate the rows (they're already paginated)
 	// We use the rows as-is since they represent only the current page
@@ -509,15 +346,32 @@ func (r *Renderer) RenderDatabasePaginatedHTML(data DatabasePaginatedData) (stri
 		cssClasses = append(cssClasses, "table-bordered")
 	}
 
-	// Enhanced HTML template with pagination support
+	// Enhanced HTML template with pagination and sorting support
 	htmlTemplate := `
 <div class="table-container">
 {{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}
 <table class="{{.CSSClasses}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Style}} style="{{.Style}}"{{end}}>
 	<thead>
 		<tr>
-			{{range .Headers}}
-			<th>{{.}}</th>
+			{{range $index, $header := .Headers}}
+			<th>
+				{{if $.SortingEnabled}}
+					<a href="{{index $.SortLinks $index}}" style="text-decoration: none; color: inherit;">
+						{{$header}}
+						{{if eq $.CurrentSortBy $header}}
+							{{if eq $.CurrentSortOrder "asc"}}
+								<span style="font-size: 0.8em;">▲</span>
+							{{else}}
+								<span style="font-size: 0.8em;">▼</span>
+							{{end}}
+						{{else}}
+							<span style="font-size: 0.8em; color: #ccc;">⬍</span>
+						{{end}}
+					</a>
+				{{else}}
+					{{$header}}
+				{{end}}
+			</th>
 			{{end}}
 		</tr>
 	</thead>
@@ -542,40 +396,81 @@ func (r *Renderer) RenderDatabasePaginatedHTML(data DatabasePaginatedData) (stri
 	// Generate pagination HTML
 	var paginationControls, paginationInfoHTML string
 	var showPaginationControls, showPaginationInfo bool
-	
+
 	if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
 		showPaginationControls = data.Options.Pagination.ShowControls
 		showPaginationInfo = data.Options.Pagination.ShowInfo
-		
+
 		if showPaginationControls {
-			paginationControls = r.generatePaginationHTML(paginationInfo, data.Options.Pagination)
+			// Parse current query parameters to preserve them in pagination links
+			currentParams := r.parseQueryParams(data.Options.Pagination.BaseURL)
+			if data.Options.Sorting != nil && data.Options.Sorting.Enabled {
+				if data.Options.Sorting.SortBy != "" {
+					currentParams["sort_by"] = data.Options.Sorting.SortBy
+				}
+				if data.Options.Sorting.SortOrder != "" {
+					currentParams["sort_order"] = data.Options.Sorting.SortOrder
+				}
+			}
+			paginationControls = r.generatePaginationHTML(paginationInfo, data.Options.Pagination, currentParams)
 		}
 		if showPaginationInfo {
 			paginationInfoHTML = r.generatePaginationInfoHTML(paginationInfo)
 		}
 	}
 
+	// Generate sorting links and data
+	var sortLinks []string
+	var sortingEnabled bool
+	var currentSortBy, currentSortOrder string
+
+	if data.Options.Sorting != nil && data.Options.Sorting.Enabled {
+		sortingEnabled = true
+		currentSortBy = data.Options.Sorting.SortBy
+		currentSortOrder = data.Options.Sorting.SortOrder
+		
+		// Parse current query parameters to preserve them in sorting links
+		currentParams := r.parseQueryParams(data.Options.Sorting.BaseURL)
+		if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
+			// Preserve current page in sorting links
+			currentParams["page"] = fmt.Sprintf("%d", data.Options.Pagination.CurrentPage)
+		}
+		
+		sortLinks = r.generateSortLinks(headers, data.Options.Sorting, currentParams)
+	} else {
+		// Create empty sort links for non-sortable tables
+		sortLinks = make([]string, len(headers))
+	}
+
 	// Prepare template data
 	templateData := struct {
-		Headers               []string
-		Rows                  [][]interface{}
-		CSSClasses           string
-		ID                   string
-		Style                template.CSS
-		PaginationControls   template.HTML
-		PaginationInfo       template.HTML
+		Headers                []string
+		Rows                   [][]interface{}
+		CSSClasses             string
+		ID                     string
+		Style                  template.CSS
+		PaginationControls     template.HTML
+		PaginationInfo         template.HTML
 		ShowPaginationControls bool
-		ShowPaginationInfo   bool
+		ShowPaginationInfo     bool
+		SortingEnabled         bool
+		SortLinks              []string
+		CurrentSortBy          string
+		CurrentSortOrder       string
 	}{
-		Headers:               headers,
-		Rows:                  rows, // Use rows as-is (already paginated at database level)
-		CSSClasses:           strings.Join(cssClasses, " "),
-		ID:                   data.Options.ID,
-		Style:                template.CSS(data.Options.Style),
-		PaginationControls:   template.HTML(paginationControls),
-		PaginationInfo:       template.HTML(paginationInfoHTML),
+		Headers:                headers,
+		Rows:                   rows, // Use rows as-is (already paginated at database level)
+		CSSClasses:             strings.Join(cssClasses, " "),
+		ID:                     data.Options.ID,
+		Style:                  template.CSS(data.Options.Style),
+		PaginationControls:     template.HTML(paginationControls),
+		PaginationInfo:         template.HTML(paginationInfoHTML),
 		ShowPaginationControls: showPaginationControls,
-		ShowPaginationInfo:   showPaginationInfo,
+		ShowPaginationInfo:     showPaginationInfo,
+		SortingEnabled:         sortingEnabled,
+		SortLinks:              sortLinks,
+		CurrentSortBy:          currentSortBy,
+		CurrentSortOrder:       currentSortOrder,
 	}
 
 	var result strings.Builder
@@ -590,118 +485,6 @@ func (r *Renderer) RenderDatabasePaginatedHTML(data DatabasePaginatedData) (stri
 	}
 
 	return result.String(), nil
-}
-
-// RenderFullPage renders a complete HTML page with table and pagination (server-side only)
-func (r *Renderer) RenderFullPage(data TableData, title string) (string, error) {
-	tableHTML, err := r.RenderHTML(data)
-	if err != nil {
-		return "", err
-	}
-
-	pageTemplate := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{.Title}}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .table-container {
-            margin: 20px 0;
-        }
-        .pagination-info {
-            margin-bottom: 10px;
-            font-size: 14px;
-            color: #666;
-        }
-        .pagination {
-            justify-content: center;
-            margin-top: 15px;
-        }
-        .pagination .page-link {
-            color: #0d6efd;
-            text-decoration: none;
-        }
-        .pagination .page-link:hover {
-            color: #0a58ca;
-            background-color: #e9ecef;
-        }
-    </style>
-</head>
-<body>
-    <div class="container mt-4">
-        <h1>{{.Title}}</h1>
-        {{.TableHTML}}
-        <div class="mt-3">
-            <small class="text-muted">Server-side rendered pagination - no JavaScript required!</small>
-        </div>
-    </div>
-</body>
-</html>`
-
-	tmpl, err := template.New("page").Parse(pageTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse page template: %w", err)
-	}
-
-	templateData := struct {
-		Title     string
-		TableHTML template.HTML
-	}{
-		Title:     title,
-		TableHTML: template.HTML(tableHTML),
-	}
-
-	var result strings.Builder
-	err = tmpl.Execute(&result, templateData)
-	if err != nil {
-		return "", fmt.Errorf("failed to execute page template: %w", err)
-	}
-
-	return result.String(), nil
-}
-
-// NewPagination creates a new pagination configuration with sensible defaults
-func NewPagination(pageSize int, currentPage int) *Pagination {
-	if pageSize <= 0 {
-		pageSize = 10
-	}
-	if currentPage <= 0 {
-		currentPage = 1
-	}
-
-	return &Pagination{
-		Enabled:       true,
-		PageSize:      pageSize,
-		CurrentPage:   currentPage,
-		ShowControls:  true,
-		ShowInfo:      true,
-		BaseURL:       "",     // Will use current URL
-		QueryParam:    "page", // Default query parameter
-		PreserveQuery: true,   // Preserve other query parameters by default
-	}
-}
-
-// NewPaginationWithURL creates pagination with custom URL configuration
-func NewPaginationWithURL(pageSize int, currentPage int, baseURL string, queryParam string) *Pagination {
-	pagination := NewPagination(pageSize, currentPage)
-	pagination.BaseURL = baseURL
-	if queryParam != "" {
-		pagination.QueryParam = queryParam
-	}
-	return pagination
-}
-
-// SetPage creates a copy of TableData with a different current page
-func (r *Renderer) SetPage(data TableData, page int) TableData {
-	newData := data
-	if newData.Options.Pagination != nil {
-		newPagination := *newData.Options.Pagination
-		newPagination.CurrentPage = page
-		newData.Options.Pagination = &newPagination
-	}
-	return newData
 }
 
 // ParsePageFromQuery extracts page number from URL query string
@@ -735,34 +518,10 @@ func ParsePageFromQuery(queryString string, paramName string) int {
 	return 1
 }
 
-// CreatePaginatedData creates TableData with pagination based on URL query
-func CreatePaginatedData(data interface{}, baseURL string, queryString string, pageSize int) TableData {
+// CreatePaginatedData creates DatabasePaginatedData for database-level pagination
+func CreatePaginatedData(data interface{}, totalCount int, baseURL string, queryString string, pageSize int) DatabasePaginatedData {
 	currentPage := ParsePageFromQuery(queryString, "page")
-	
-	return TableData{
-		Data: data,
-		Options: TableOptions{
-			Responsive: true,
-			Striped:    true,
-			Bordered:   true,
-			Pagination: &Pagination{
-				Enabled:       true,
-				PageSize:      pageSize,
-				CurrentPage:   currentPage,
-				ShowControls:  true,
-				ShowInfo:      true,
-				BaseURL:       baseURL,
-				QueryParam:    "page",
-				PreserveQuery: true,
-			},
-		},
-	}
-}
 
-// CreateDatabasePaginatedData creates DatabasePaginatedData for database-level pagination
-func CreateDatabasePaginatedData(data interface{}, totalCount int, baseURL string, queryString string, pageSize int) DatabasePaginatedData {
-	currentPage := ParsePageFromQuery(queryString, "page")
-	
 	return DatabasePaginatedData{
 		Data:       data, // Only current page data
 		TotalCount: totalCount,
@@ -785,6 +544,46 @@ func CreateDatabasePaginatedData(data interface{}, totalCount int, baseURL strin
 	}
 }
 
+// CreatePaginatedDataWithSorting creates DatabasePaginatedData with both pagination and sorting support
+func CreatePaginatedDataWithSorting(data interface{}, totalCount int, baseURL string, queryString string, pageSize int, enableSorting bool) DatabasePaginatedData {
+	currentPage := ParsePageFromQuery(queryString, "page")
+	sortBy, sortOrder := ParseSortFromQuery(queryString, "sort_by", "sort_order")
+
+	result := DatabasePaginatedData{
+		Data:       data, // Only current page data
+		TotalCount: totalCount,
+		Options: TableOptions{
+			Responsive: true,
+			Striped:    true,
+			Bordered:   true,
+			Pagination: &Pagination{
+				Enabled:       true,
+				PageSize:      pageSize,
+				CurrentPage:   currentPage,
+				ShowControls:  true,
+				ShowInfo:      true,
+				BaseURL:       baseURL, // Use base URL without query params for pagination
+				QueryParam:    "page",
+				PreserveQuery: true,
+				TotalCount:    totalCount, // Important: set total count for database pagination
+			},
+		},
+	}
+
+	if enableSorting {
+		result.Options.Sorting = &Sorting{
+			Enabled:    true,
+			SortBy:     sortBy,
+			SortOrder:  sortOrder,
+			BaseURL:    baseURL, // Use base URL without query params for sorting
+			QueryParam: "sort_by",
+			OrderParam: "sort_order",
+		}
+	}
+
+	return result
+}
+
 // CalculateDatabaseOffset calculates OFFSET for database queries
 func CalculateDatabaseOffset(page int, pageSize int) int {
 	if page < 1 {
@@ -799,4 +598,141 @@ func CalculateDatabaseLimit(pageSize int) int {
 		return 10 // default page size
 	}
 	return pageSize
+}
+
+// generateSortLinks generates sorting URLs for each column header
+func (r *Renderer) generateSortLinks(headers []string, sorting *Sorting, currentQueryParams map[string]string) []string {
+	if sorting == nil || !sorting.Enabled {
+		return make([]string, len(headers))
+	}
+
+	// Set defaults for URL generation
+	baseURL := sorting.BaseURL
+	if baseURL == "" {
+		baseURL = ""
+	}
+	sortParam := sorting.QueryParam
+	if sortParam == "" {
+		sortParam = "sort_by"
+	}
+	orderParam := sorting.OrderParam
+	if orderParam == "" {
+		orderParam = "sort_order"
+	}
+
+	sortLinks := make([]string, len(headers))
+
+	for i, header := range headers {
+		// Determine sort order for this column
+		sortOrder := "asc"
+		if sorting.SortBy == header && sorting.SortOrder == "asc" {
+			sortOrder = "desc" // Toggle to desc if already sorting asc
+		}
+
+		// Build parameters list preserving existing ones (except page - sorting resets to page 1)
+		params := make([]string, 0)
+		
+		// Add sorting parameters
+		params = append(params, fmt.Sprintf("%s=%s", sortParam, header))
+		params = append(params, fmt.Sprintf("%s=%s", orderParam, sortOrder))
+		
+		// Add other preserved parameters but exclude page and sort params
+		for key, value := range currentQueryParams {
+			if key != sortParam && key != orderParam && key != "page" { // Exclude page to reset pagination
+				params = append(params, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+		
+		queryString := strings.Join(params, "&")
+
+		// Generate URL for this column
+		if baseURL == "" {
+			sortLinks[i] = "?" + queryString
+		} else if strings.Contains(baseURL, "?") {
+			sortLinks[i] = baseURL + "&" + queryString
+		} else {
+			sortLinks[i] = baseURL + "?" + queryString
+		}
+	}
+
+	return sortLinks
+}
+
+// parseQueryParams extracts query parameters from a URL or query string
+func (r *Renderer) parseQueryParams(urlOrQuery string) map[string]string {
+	params := make(map[string]string)
+	
+	if urlOrQuery == "" {
+		return params
+	}
+	
+	// Extract query part if it's a full URL
+	queryString := urlOrQuery
+	if strings.Contains(urlOrQuery, "?") {
+		parts := strings.Split(urlOrQuery, "?")
+		if len(parts) > 1 {
+			queryString = parts[1]
+		}
+	}
+	
+	// Remove leading '?' if present
+	queryString = strings.TrimPrefix(queryString, "?")
+	
+	if queryString == "" {
+		return params
+	}
+	
+	// Split by '&' to get individual parameters
+	pairs := strings.Split(queryString, "&")
+	for _, pair := range pairs {
+		if strings.Contains(pair, "=") {
+			parts := strings.SplitN(pair, "=", 2)
+			if len(parts) == 2 {
+				params[parts[0]] = parts[1]
+			}
+		}
+	}
+	
+	return params
+}
+
+// ParseSortFromQuery extracts sort field and order from URL query string
+// This is a helper function for web applications
+func ParseSortFromQuery(queryString string, sortParam string, orderParam string) (string, string) {
+	if sortParam == "" {
+		sortParam = "sort_by"
+	}
+	if orderParam == "" {
+		orderParam = "sort_order"
+	}
+
+	// Simple query parameter parsing
+	if queryString == "" {
+		return "", "asc"
+	}
+
+	// Remove leading '?' if present
+	queryString = strings.TrimPrefix(queryString, "?")
+
+	var sortBy, sortOrder string
+	sortOrder = "asc" // default
+
+	// Split by '&' to get individual parameters
+	params := strings.Split(queryString, "&")
+	for _, param := range params {
+		if strings.Contains(param, "=") {
+			parts := strings.SplitN(param, "=", 2)
+			if len(parts) == 2 {
+				if parts[0] == sortParam {
+					sortBy = parts[1]
+				} else if parts[0] == orderParam {
+					if parts[1] == "desc" {
+						sortOrder = "desc"
+					}
+				}
+			}
+		}
+	}
+
+	return sortBy, sortOrder
 }
