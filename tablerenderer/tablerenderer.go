@@ -36,6 +36,7 @@ type TableOptions struct {
 	Style      string      `json:"style,omitempty"`
 	Pagination *Pagination `json:"pagination,omitempty"`
 	Sorting    *Sorting    `json:"sorting,omitempty"`
+	Search     *Search     `json:"search,omitempty"`
 }
 
 // Pagination holds pagination configuration
@@ -61,6 +62,18 @@ type Sorting struct {
 	BaseURL     string `json:"base_url,omitempty"`     // Base URL for sorting links
 	QueryParam  string `json:"query_param,omitempty"`  // Query parameter name for sort (default: "sort_by")
 	OrderParam  string `json:"order_param,omitempty"`  // Query parameter name for order (default: "sort_order")
+}
+
+// Search holds search configuration for server-side search
+type Search struct {
+	Enabled       bool     `json:"enabled"`
+	SearchTerm    string   `json:"search_term,omitempty"`    // Current search term
+	Placeholder   string   `json:"placeholder,omitempty"`    // Search input placeholder
+	SearchColumns []string `json:"search_columns,omitempty"` // Columns to search (empty = all columns)
+	CaseSensitive bool     `json:"case_sensitive,omitempty"` // Case sensitive search
+	BaseURL       string   `json:"base_url,omitempty"`       // Base URL for search
+	QueryParam    string   `json:"query_param,omitempty"`    // Query parameter name (default: "search")
+	MinLength     int      `json:"min_length,omitempty"`     // Minimum search length (default: 1)
 }
 
 // Renderer is the main struct for rendering tables
@@ -302,6 +315,115 @@ func (r *Renderer) generatePageSizeHTML(pagination *Pagination, currentQueryPara
 	return html.String()
 }
 
+// generateSearchHTML generates HTML for search input
+func (r *Renderer) generateSearchHTML(search *Search, currentQueryParams map[string]string) string {
+	if search == nil || !search.Enabled {
+		return ""
+	}
+
+	// Set defaults
+	placeholder := search.Placeholder
+	if placeholder == "" {
+		placeholder = "Search all columns..."
+	}
+	queryParam := search.QueryParam
+	if queryParam == "" {
+		queryParam = "search"
+	}
+	baseURL := search.BaseURL
+	if baseURL == "" {
+		baseURL = ""
+	}
+
+	// Get current search term
+	searchTerm := search.SearchTerm
+
+	// Build form action URL with preserved parameters
+	actionParams := make([]string, 0)
+	for key, value := range currentQueryParams {
+		if key != queryParam && key != "page" { // Exclude search param and reset page
+			actionParams = append(actionParams, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	
+	var actionURL string
+	if len(actionParams) > 0 {
+		queryString := strings.Join(actionParams, "&")
+		if baseURL == "" {
+			actionURL = "?" + queryString
+		} else if strings.Contains(baseURL, "?") {
+			actionURL = baseURL + "&" + queryString
+		} else {
+			actionURL = baseURL + "?" + queryString
+		}
+	} else {
+		actionURL = baseURL
+		if actionURL == "" {
+			actionURL = ""
+		}
+	}
+
+	var html strings.Builder
+	html.WriteString(`<div class="search-control mb-3">`)
+	html.WriteString(`<form method="GET" action="` + actionURL + `" class="d-flex align-items-center">`)
+	
+	// Add hidden fields for preserved parameters
+	for key, value := range currentQueryParams {
+		if key != queryParam && key != "page" {
+			html.WriteString(fmt.Sprintf(`<input type="hidden" name="%s" value="%s">`, key, value))
+		}
+	}
+	
+	html.WriteString(`<div class="input-group" style="max-width: 300px;">`)
+	html.WriteString(fmt.Sprintf(`<input type="text" name="%s" class="form-control" placeholder="%s" value="%s">`, 
+		queryParam, placeholder, searchTerm))
+	html.WriteString(`<button class="btn btn-outline-secondary" type="submit">`)
+	html.WriteString(`<i class="fas fa-search"></i> Search`)
+	html.WriteString(`</button>`)
+	
+	// Clear search button if there's a search term
+	if searchTerm != "" {
+		clearURL := actionURL
+		if clearURL == "" {
+			clearURL = "?"
+		} else if !strings.Contains(clearURL, "?") {
+			clearURL += "?"
+		} else {
+			clearURL += "&"
+		}
+		// Add preserved parameters for clear URL
+		clearParams := make([]string, 0)
+		for key, value := range currentQueryParams {
+			if key != queryParam && key != "page" {
+				clearParams = append(clearParams, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+		if len(clearParams) > 0 {
+			if strings.HasSuffix(clearURL, "?") {
+				clearURL += strings.Join(clearParams, "&")
+			} else {
+				clearURL += strings.Join(clearParams, "&")
+			}
+		} else {
+			clearURL = strings.TrimSuffix(clearURL, "?")
+			clearURL = strings.TrimSuffix(clearURL, "&")
+			if clearURL == "" {
+				clearURL = "/"
+			}
+		}
+		
+		html.WriteString(fmt.Sprintf(`<a href="%s" class="btn btn-outline-danger" title="Clear search">`, clearURL))
+		html.WriteString(`<i class="fas fa-times"></i>`)
+		html.WriteString(`</a>`)
+	}
+	
+	html.WriteString(`</div>`)
+	html.WriteString(`</form>`)
+	html.WriteString(`</div>`)
+
+	return html.String()
+}
+
 // extractHeadersFromStruct extracts field names from a struct type to use as headers
 func extractHeadersFromStruct(structType reflect.Type) []string {
 	var headers []string
@@ -417,8 +539,11 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 	// Enhanced HTML template with pagination and sorting support
 	htmlTemplate := `
 <div class="table-container">
-{{if .ShowPageSizer}}{{.PageSizerHTML}}{{end}}
-{{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}
+{{if .ShowSearch}}{{.SearchHTML}}{{end}}
+<div class="d-flex justify-content-between align-items-center mb-2">
+	<div>{{if .ShowPageSizer}}{{.PageSizerHTML}}{{end}}</div>
+	<div>{{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}</div>
+</div>
 <table class="{{.CSSClasses}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Style}} style="{{.Style}}"{{end}}>
 	<thead>
 		<tr>
@@ -485,6 +610,14 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 			if paginationInfo.PageSize > 0 {
 				currentParams["page_size"] = fmt.Sprintf("%d", paginationInfo.PageSize)
 			}
+			// Add current search term to preserve it in pagination links
+			if data.Options.Search != nil && data.Options.Search.Enabled && data.Options.Search.SearchTerm != "" {
+				searchParam := data.Options.Search.QueryParam
+				if searchParam == "" {
+					searchParam = "search"
+				}
+				currentParams[searchParam] = data.Options.Search.SearchTerm
+			}
 			paginationControls = r.generatePaginationHTML(paginationInfo, data.Options.Pagination, currentParams)
 		}
 		if showPaginationInfo {
@@ -508,6 +641,14 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 				currentParams["sort_order"] = data.Options.Sorting.SortOrder
 			}
 		}
+		// Add current search term to preserve it in page size links
+		if data.Options.Search != nil && data.Options.Search.Enabled && data.Options.Search.SearchTerm != "" {
+			searchParam := data.Options.Search.QueryParam
+			if searchParam == "" {
+				searchParam = "search"
+			}
+			currentParams[searchParam] = data.Options.Search.SearchTerm
+		}
 		pageSizerHTML = r.generatePageSizeHTML(data.Options.Pagination, currentParams)
 	}
 
@@ -526,12 +667,51 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
 			// Preserve current page in sorting links
 			currentParams["page"] = fmt.Sprintf("%d", data.Options.Pagination.CurrentPage)
+			// Add current page size to preserve it in sorting links
+			if paginationInfo.PageSize > 0 {
+				currentParams["page_size"] = fmt.Sprintf("%d", paginationInfo.PageSize)
+			}
+		}
+		// Add current search term to preserve it in sorting links
+		if data.Options.Search != nil && data.Options.Search.Enabled && data.Options.Search.SearchTerm != "" {
+			searchParam := data.Options.Search.QueryParam
+			if searchParam == "" {
+				searchParam = "search"
+			}
+			currentParams[searchParam] = data.Options.Search.SearchTerm
 		}
 		
 		sortLinks = r.generateSortLinks(headers, data.Options.Sorting, currentParams)
 	} else {
 		// Create empty sort links for non-sortable tables
 		sortLinks = make([]string, len(headers))
+	}
+
+	// Generate search control HTML
+	var searchHTML string
+	var showSearch bool
+	var currentSearchTerm string
+
+	if data.Options.Search != nil && data.Options.Search.Enabled {
+		showSearch = true
+		currentSearchTerm = data.Options.Search.SearchTerm
+		// Parse current query parameters to preserve them in search
+		currentParams := r.parseQueryParams(data.Options.Search.BaseURL)
+		if data.Options.Sorting != nil && data.Options.Sorting.Enabled {
+			if data.Options.Sorting.SortBy != "" {
+				currentParams["sort_by"] = data.Options.Sorting.SortBy
+			}
+			if data.Options.Sorting.SortOrder != "" {
+				currentParams["sort_order"] = data.Options.Sorting.SortOrder
+			}
+		}
+		if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
+			// Add current page size to preserve it in search
+			if paginationInfo.PageSize > 0 {
+				currentParams["page_size"] = fmt.Sprintf("%d", paginationInfo.PageSize)
+			}
+		}
+		searchHTML = r.generateSearchHTML(data.Options.Search, currentParams)
 	}
 
 	// Prepare template data
@@ -551,6 +731,9 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		CurrentSortOrder       string
 		PageSizerHTML          template.HTML
 		ShowPageSizer          bool
+		SearchHTML             template.HTML
+		ShowSearch             bool
+		CurrentSearchTerm      string
 	}{
 		Headers:                headers,
 		Rows:                   rows, // Use rows as-is (already paginated at database level)
@@ -567,6 +750,9 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		CurrentSortOrder:       currentSortOrder,
 		PageSizerHTML:          template.HTML(pageSizerHTML),
 		ShowPageSizer:          showPageSizer,
+		SearchHTML:             template.HTML(searchHTML),
+		ShowSearch:             showSearch,
+		CurrentSearchTerm:      currentSearchTerm,
 	}
 
 	var result strings.Builder
@@ -703,6 +889,59 @@ func CreatePaginatedDataWithSorting(data interface{}, totalCount int, baseURL st
 			BaseURL:    baseURL, // Use base URL without query params for sorting
 			QueryParam: "sort_by",
 			OrderParam: "sort_order",
+		}
+	}
+
+	return result
+}
+
+// CreatePaginatedDataWithSortingAndSearch creates database pagination data with sorting and search
+func CreatePaginatedDataWithSortingAndSearch(data interface{}, totalCount int, baseURL string, queryString string, pageSize int, enableSorting bool, enableSearch bool, searchTerm string) DatabasePaginatedData {
+	currentPage := ParsePageFromQuery(queryString, "page")
+	sortBy, sortOrder := ParseSortFromQuery(queryString, "sort_by", "sort_order")
+
+	result := DatabasePaginatedData{
+		Data:       data, // Only current page data
+		TotalCount: totalCount,
+		Options: TableOptions{
+			Responsive: true,
+			Striped:    true,
+			Bordered:   true,
+			Pagination: &Pagination{
+				Enabled:         true,
+				PageSize:        pageSize,
+				CurrentPage:     currentPage,
+				ShowControls:    true,
+				ShowInfo:        true,
+				ShowPageSizer:   true,                          // Enable page size control
+				PageSizeOptions: []int{10, 25, 50, 100},      // Default page size options
+				BaseURL:         baseURL, // Use base URL without query params for pagination
+				QueryParam:      "page",
+				PreserveQuery:   true,
+				TotalCount:      totalCount, // Important: set total count for database pagination
+			},
+		},
+	}
+
+	if enableSorting {
+		result.Options.Sorting = &Sorting{
+			Enabled:    true,
+			SortBy:     sortBy,
+			SortOrder:  sortOrder,
+			BaseURL:    baseURL, // Use base URL without query params for sorting
+			QueryParam: "sort_by",
+			OrderParam: "sort_order",
+		}
+	}
+
+	if enableSearch {
+		result.Options.Search = &Search{
+			Enabled:     true,
+			SearchTerm:  searchTerm,
+			Placeholder: "Search all columns...",
+			BaseURL:     baseURL, // Use base URL without query params for search
+			QueryParam:  "search",
+			MinLength:   1,
 		}
 	}
 
@@ -860,4 +1099,31 @@ func ParseSortFromQuery(queryString string, sortParam string, orderParam string)
 	}
 
 	return sortBy, sortOrder
+}
+
+// ParseSearchFromQuery parses search term from query string
+func ParseSearchFromQuery(rawQuery string, defaultSearchParam string) string {
+	if rawQuery == "" {
+		return ""
+	}
+
+	searchParam := defaultSearchParam
+	if searchParam == "" {
+		searchParam = "search"
+	}
+
+	// Parse the raw query string
+	params := strings.Split(rawQuery, "&")
+	for _, param := range params {
+		if strings.Contains(param, "=") {
+			parts := strings.SplitN(param, "=", 2)
+			if len(parts) == 2 && parts[0] == searchParam {
+				// URL decode the search term (basic decoding)
+				decoded := strings.Replace(parts[1], "+", " ", -1)
+				return decoded
+			}
+		}
+	}
+
+	return ""
 }
