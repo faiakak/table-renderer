@@ -40,15 +40,17 @@ type TableOptions struct {
 
 // Pagination holds pagination configuration
 type Pagination struct {
-	Enabled       bool   `json:"enabled"`
-	PageSize      int    `json:"page_size"`
-	CurrentPage   int    `json:"current_page"`
-	ShowControls  bool   `json:"show_controls"`
-	ShowInfo      bool   `json:"show_info"`
-	BaseURL       string `json:"base_url,omitempty"`       // Base URL for pagination links
-	QueryParam    string `json:"query_param,omitempty"`    // Query parameter name for page (default: "page")
-	PreserveQuery bool   `json:"preserve_query,omitempty"` // Whether to preserve other query parameters
-	TotalCount    int    `json:"total_count,omitempty"`    // Total records (for database pagination)
+	Enabled         bool   `json:"enabled"`
+	PageSize        int    `json:"page_size"`
+	CurrentPage     int    `json:"current_page"`
+	ShowControls    bool   `json:"show_controls"`
+	ShowInfo        bool   `json:"show_info"`
+	ShowPageSizer   bool   `json:"show_page_sizer,omitempty"`  // Show page size dropdown
+	PageSizeOptions []int  `json:"page_size_options,omitempty"` // Available page size options
+	BaseURL         string `json:"base_url,omitempty"`       // Base URL for pagination links
+	QueryParam      string `json:"query_param,omitempty"`    // Query parameter name for page (default: "page")
+	PreserveQuery   bool   `json:"preserve_query,omitempty"` // Whether to preserve other query parameters
+	TotalCount      int    `json:"total_count,omitempty"`    // Total records (for database pagination)
 }
 
 // Sorting holds sorting configuration for server-side sorting
@@ -234,6 +236,72 @@ func (r *Renderer) generatePaginationInfoHTML(paginationInfo PaginationInfo) str
 		paginationInfo.StartRow, paginationInfo.EndRow, paginationInfo.TotalRows)
 }
 
+// generatePageSizeHTML generates HTML for page size dropdown
+func (r *Renderer) generatePageSizeHTML(pagination *Pagination, currentQueryParams map[string]string) string {
+	if pagination == nil || !pagination.ShowPageSizer {
+		return ""
+	}
+
+	// Default page size options if not specified
+	options := pagination.PageSizeOptions
+	if len(options) == 0 {
+		options = []int{10, 25, 50, 100}
+	}
+
+	// Set defaults for URL generation
+	baseURL := pagination.BaseURL
+	if baseURL == "" {
+		baseURL = ""
+	}
+
+	// Helper function to generate URL for a page size while preserving other query parameters
+	generateURL := func(pageSize int) string {
+		params := make([]string, 0)
+		
+		// Add page size parameter
+		params = append(params, fmt.Sprintf("page_size=%d", pageSize))
+		
+		// Reset to page 1 when changing page size
+		params = append(params, "page=1")
+		
+		// Add other preserved parameters (except page and page_size)
+		for key, value := range currentQueryParams {
+			if key != "page" && key != "page_size" {
+				params = append(params, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+		
+		queryString := strings.Join(params, "&")
+		
+		if baseURL == "" {
+			return "?" + queryString
+		}
+		if strings.Contains(baseURL, "?") {
+			return baseURL + "&" + queryString
+		}
+		return baseURL + "?" + queryString
+	}
+
+	var html strings.Builder
+	html.WriteString(`<div class="page-size-control d-flex align-items-center mb-3">`)
+	html.WriteString(`<label for="page-size-select" class="form-label me-2 mb-0">Show:</label>`)
+	html.WriteString(`<select id="page-size-select" class="form-select form-select-sm" style="width: auto;" onchange="window.location.href=this.value">`)
+	
+	for _, size := range options {
+		selected := ""
+		if size == pagination.PageSize {
+			selected = " selected"
+		}
+		html.WriteString(fmt.Sprintf(`<option value="%s"%s>%d entries</option>`, 
+			generateURL(size), selected, size))
+	}
+	
+	html.WriteString(`</select>`)
+	html.WriteString(`</div>`)
+	
+	return html.String()
+}
+
 // extractHeadersFromStruct extracts field names from a struct type to use as headers
 func extractHeadersFromStruct(structType reflect.Type) []string {
 	var headers []string
@@ -349,6 +417,7 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 	// Enhanced HTML template with pagination and sorting support
 	htmlTemplate := `
 <div class="table-container">
+{{if .ShowPageSizer}}{{.PageSizerHTML}}{{end}}
 {{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}
 <table class="{{.CSSClasses}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Style}} style="{{.Style}}"{{end}}>
 	<thead>
@@ -412,11 +481,34 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 					currentParams["sort_order"] = data.Options.Sorting.SortOrder
 				}
 			}
+			// Add current page size to preserve it in pagination links
+			if paginationInfo.PageSize > 0 {
+				currentParams["page_size"] = fmt.Sprintf("%d", paginationInfo.PageSize)
+			}
 			paginationControls = r.generatePaginationHTML(paginationInfo, data.Options.Pagination, currentParams)
 		}
 		if showPaginationInfo {
 			paginationInfoHTML = r.generatePaginationInfoHTML(paginationInfo)
 		}
+	}
+
+	// Generate page size control HTML
+	var pageSizerHTML string
+	var showPageSizer bool
+
+	if data.Options.Pagination != nil && data.Options.Pagination.Enabled && data.Options.Pagination.ShowPageSizer {
+		showPageSizer = true
+		// Parse current query parameters to preserve them in page size links
+		currentParams := r.parseQueryParams(data.Options.Pagination.BaseURL)
+		if data.Options.Sorting != nil && data.Options.Sorting.Enabled {
+			if data.Options.Sorting.SortBy != "" {
+				currentParams["sort_by"] = data.Options.Sorting.SortBy
+			}
+			if data.Options.Sorting.SortOrder != "" {
+				currentParams["sort_order"] = data.Options.Sorting.SortOrder
+			}
+		}
+		pageSizerHTML = r.generatePageSizeHTML(data.Options.Pagination, currentParams)
 	}
 
 	// Generate sorting links and data
@@ -457,6 +549,8 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		SortLinks              []string
 		CurrentSortBy          string
 		CurrentSortOrder       string
+		PageSizerHTML          template.HTML
+		ShowPageSizer          bool
 	}{
 		Headers:                headers,
 		Rows:                   rows, // Use rows as-is (already paginated at database level)
@@ -471,6 +565,8 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		SortLinks:              sortLinks,
 		CurrentSortBy:          currentSortBy,
 		CurrentSortOrder:       currentSortOrder,
+		PageSizerHTML:          template.HTML(pageSizerHTML),
+		ShowPageSizer:          showPageSizer,
 	}
 
 	var result strings.Builder
@@ -518,6 +614,33 @@ func ParsePageFromQuery(queryString string, paramName string) int {
 	return 1
 }
 
+// ParsePageSizeFromQuery extracts page size from URL query string
+// This is a helper function for web applications
+func ParsePageSizeFromQuery(queryString string, defaultPageSize int) int {
+	// Simple query parameter parsing
+	if queryString == "" {
+		return defaultPageSize
+	}
+
+	// Remove leading '?' if present
+	queryString = strings.TrimPrefix(queryString, "?")
+
+	// Split by '&' to get individual parameters
+	params := strings.Split(queryString, "&")
+	for _, param := range params {
+		if strings.Contains(param, "=") {
+			parts := strings.SplitN(param, "=", 2)
+			if len(parts) == 2 && parts[0] == "page_size" {
+				if pageSize, err := strconv.Atoi(parts[1]); err == nil && pageSize > 0 {
+					return pageSize
+				}
+			}
+		}
+	}
+
+	return defaultPageSize
+}
+
 // CreatePaginatedData creates DatabasePaginatedData for database-level pagination
 func CreatePaginatedData(data interface{}, totalCount int, baseURL string, queryString string, pageSize int) DatabasePaginatedData {
 	currentPage := ParsePageFromQuery(queryString, "page")
@@ -557,15 +680,17 @@ func CreatePaginatedDataWithSorting(data interface{}, totalCount int, baseURL st
 			Striped:    true,
 			Bordered:   true,
 			Pagination: &Pagination{
-				Enabled:       true,
-				PageSize:      pageSize,
-				CurrentPage:   currentPage,
-				ShowControls:  true,
-				ShowInfo:      true,
-				BaseURL:       baseURL, // Use base URL without query params for pagination
-				QueryParam:    "page",
-				PreserveQuery: true,
-				TotalCount:    totalCount, // Important: set total count for database pagination
+				Enabled:         true,
+				PageSize:        pageSize,
+				CurrentPage:     currentPage,
+				ShowControls:    true,
+				ShowInfo:        true,
+				ShowPageSizer:   true,                          // Enable page size control
+				PageSizeOptions: []int{10, 25, 50, 100},      // Default page size options
+				BaseURL:         baseURL, // Use base URL without query params for pagination
+				QueryParam:      "page",
+				PreserveQuery:   true,
+				TotalCount:      totalCount, // Important: set total count for database pagination
 			},
 		},
 	}
