@@ -373,6 +373,9 @@ func (r *Renderer) generateSearchHTML(search *Search, currentQueryParams map[str
 	html.WriteString(fmt.Sprintf(`<input type="text" name="%s" placeholder="%s" value="%s">`,
 		queryParam, placeholder, searchTerm))
 
+	// Add search button
+	html.WriteString(`<button type="submit" class="search-btn" title="Search">🔍</button>`)
+
 	// Clear search button if there's a search term
 	if searchTerm != "" {
 		clearURL := actionURL
@@ -592,6 +595,27 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		
 		.search-input-group input:focus {
 			border-color: #80bdff;
+			box-shadow: 0 0 0 0.2rem rgba(0,123,255,0.25);
+		}
+		
+		.search-btn {
+			margin-left: 0.5rem;
+			padding: 0.5rem 0.75rem;
+			background: #007bff;
+			color: white;
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 0.875rem;
+			transition: background-color 0.2s ease;
+		}
+		
+		.search-btn:hover {
+			background: #0056b3;
+		}
+		
+		.search-btn:focus {
+			outline: none;
 			box-shadow: 0 0 0 0.2rem rgba(0,123,255,0.25);
 		}
 		
