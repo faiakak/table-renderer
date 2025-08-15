@@ -46,22 +46,22 @@ type Pagination struct {
 	CurrentPage     int    `json:"current_page"`
 	ShowControls    bool   `json:"show_controls"`
 	ShowInfo        bool   `json:"show_info"`
-	ShowPageSizer   bool   `json:"show_page_sizer,omitempty"`  // Show page size dropdown
+	ShowPageSizer   bool   `json:"show_page_sizer,omitempty"`   // Show page size dropdown
 	PageSizeOptions []int  `json:"page_size_options,omitempty"` // Available page size options
-	BaseURL         string `json:"base_url,omitempty"`       // Base URL for pagination links
-	QueryParam      string `json:"query_param,omitempty"`    // Query parameter name for page (default: "page")
-	PreserveQuery   bool   `json:"preserve_query,omitempty"` // Whether to preserve other query parameters
-	TotalCount      int    `json:"total_count,omitempty"`    // Total records (for database pagination)
+	BaseURL         string `json:"base_url,omitempty"`          // Base URL for pagination links
+	QueryParam      string `json:"query_param,omitempty"`       // Query parameter name for page (default: "page")
+	PreserveQuery   bool   `json:"preserve_query,omitempty"`    // Whether to preserve other query parameters
+	TotalCount      int    `json:"total_count,omitempty"`       // Total records (for database pagination)
 }
 
 // Sorting holds sorting configuration for server-side sorting
 type Sorting struct {
-	Enabled     bool   `json:"enabled"`
-	SortBy      string `json:"sort_by,omitempty"`      // Field name to sort by
-	SortOrder   string `json:"sort_order,omitempty"`   // "asc" or "desc"
-	BaseURL     string `json:"base_url,omitempty"`     // Base URL for sorting links
-	QueryParam  string `json:"query_param,omitempty"`  // Query parameter name for sort (default: "sort_by")
-	OrderParam  string `json:"order_param,omitempty"`  // Query parameter name for order (default: "sort_order")
+	Enabled    bool   `json:"enabled"`
+	SortBy     string `json:"sort_by,omitempty"`     // Field name to sort by
+	SortOrder  string `json:"sort_order,omitempty"`  // "asc" or "desc"
+	BaseURL    string `json:"base_url,omitempty"`    // Base URL for sorting links
+	QueryParam string `json:"query_param,omitempty"` // Query parameter name for sort (default: "sort_by")
+	OrderParam string `json:"order_param,omitempty"` // Query parameter name for order (default: "sort_order")
 }
 
 // Search holds search configuration for server-side search
@@ -161,19 +161,19 @@ func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, paginat
 	// Helper function to generate URL for a page while preserving other query parameters
 	generateURL := func(page int) string {
 		params := make([]string, 0)
-		
+
 		// Add page parameter
 		params = append(params, fmt.Sprintf("%s=%d", queryParam, page))
-		
+
 		// Add other preserved parameters (like sorting)
 		for key, value := range currentQueryParams {
 			if key != queryParam { // Don't duplicate page param
 				params = append(params, fmt.Sprintf("%s=%s", key, value))
 			}
 		}
-		
+
 		queryString := strings.Join(params, "&")
-		
+
 		if baseURL == "" {
 			return "?" + queryString
 		}
@@ -185,7 +185,6 @@ func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, paginat
 
 	var html strings.Builder
 
-	html.WriteString(`<nav aria-label="Table pagination">`)
 	html.WriteString(`<ul class="pagination">`)
 
 	// Previous button
@@ -234,7 +233,6 @@ func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, paginat
 	}
 
 	html.WriteString(`</ul>`)
-	html.WriteString(`</nav>`)
 
 	return html.String()
 }
@@ -242,10 +240,10 @@ func (r *Renderer) generatePaginationHTML(paginationInfo PaginationInfo, paginat
 // generatePaginationInfoHTML generates HTML showing pagination information
 func (r *Renderer) generatePaginationInfoHTML(paginationInfo PaginationInfo) string {
 	if paginationInfo.TotalRows == 0 {
-		return `<div class="pagination-info">No records found</div>`
+		return `No records found`
 	}
 
-	return fmt.Sprintf(`<div class="pagination-info">Showing %d to %d of %d entries</div>`,
+	return fmt.Sprintf(`Showing %d to %d of %d entries`,
 		paginationInfo.StartRow, paginationInfo.EndRow, paginationInfo.TotalRows)
 }
 
@@ -270,22 +268,22 @@ func (r *Renderer) generatePageSizeHTML(pagination *Pagination, currentQueryPara
 	// Helper function to generate URL for a page size while preserving other query parameters
 	generateURL := func(pageSize int) string {
 		params := make([]string, 0)
-		
+
 		// Add page size parameter
 		params = append(params, fmt.Sprintf("page_size=%d", pageSize))
-		
+
 		// Reset to page 1 when changing page size
 		params = append(params, "page=1")
-		
+
 		// Add other preserved parameters (except page and page_size)
 		for key, value := range currentQueryParams {
 			if key != "page" && key != "page_size" {
 				params = append(params, fmt.Sprintf("%s=%s", key, value))
 			}
 		}
-		
+
 		queryString := strings.Join(params, "&")
-		
+
 		if baseURL == "" {
 			return "?" + queryString
 		}
@@ -296,22 +294,19 @@ func (r *Renderer) generatePageSizeHTML(pagination *Pagination, currentQueryPara
 	}
 
 	var html strings.Builder
-	html.WriteString(`<div class="page-size-control d-flex align-items-center mb-3">`)
-	html.WriteString(`<label for="page-size-select" class="form-label me-2 mb-0">Show:</label>`)
-	html.WriteString(`<select id="page-size-select" class="form-select form-select-sm" style="width: auto;" onchange="window.location.href=this.value">`)
-	
+	html.WriteString(`<select onchange="window.location.href=this.value">`)
+
 	for _, size := range options {
 		selected := ""
 		if size == pagination.PageSize {
 			selected = " selected"
 		}
-		html.WriteString(fmt.Sprintf(`<option value="%s"%s>%d entries</option>`, 
+		html.WriteString(fmt.Sprintf(`<option value="%s"%s>%d entries per page</option>`,
 			generateURL(size), selected, size))
 	}
-	
+
 	html.WriteString(`</select>`)
-	html.WriteString(`</div>`)
-	
+
 	return html.String()
 }
 
@@ -345,7 +340,7 @@ func (r *Renderer) generateSearchHTML(search *Search, currentQueryParams map[str
 			actionParams = append(actionParams, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	var actionURL string
 	if len(actionParams) > 0 {
 		queryString := strings.Join(actionParams, "&")
@@ -364,23 +359,20 @@ func (r *Renderer) generateSearchHTML(search *Search, currentQueryParams map[str
 	}
 
 	var html strings.Builder
-	html.WriteString(`<div class="search-control mb-3">`)
-	html.WriteString(`<form method="GET" action="` + actionURL + `" class="d-flex align-items-center">`)
-	
+	html.WriteString(`<form method="GET" action="` + actionURL + `" class="search-form">`)
+
 	// Add hidden fields for preserved parameters
 	for key, value := range currentQueryParams {
 		if key != queryParam && key != "page" {
 			html.WriteString(fmt.Sprintf(`<input type="hidden" name="%s" value="%s">`, key, value))
 		}
 	}
-	
-	html.WriteString(`<div class="input-group" style="max-width: 300px;">`)
-	html.WriteString(fmt.Sprintf(`<input type="text" name="%s" class="form-control" placeholder="%s" value="%s">`, 
+
+	html.WriteString(`<label>Search:</label>`)
+	html.WriteString(`<div class="search-input-group">`)
+	html.WriteString(fmt.Sprintf(`<input type="text" name="%s" placeholder="%s" value="%s">`,
 		queryParam, placeholder, searchTerm))
-	html.WriteString(`<button class="btn btn-outline-secondary" type="submit">`)
-	html.WriteString(`<i class="fas fa-search"></i> Search`)
-	html.WriteString(`</button>`)
-	
+
 	// Clear search button if there's a search term
 	if searchTerm != "" {
 		clearURL := actionURL
@@ -411,15 +403,12 @@ func (r *Renderer) generateSearchHTML(search *Search, currentQueryParams map[str
 				clearURL = "/"
 			}
 		}
-		
-		html.WriteString(fmt.Sprintf(`<a href="%s" class="btn btn-outline-danger" title="Clear search">`, clearURL))
-		html.WriteString(`<i class="fas fa-times"></i>`)
-		html.WriteString(`</a>`)
+
+		html.WriteString(fmt.Sprintf(`<a href="%s" class="search-clear-btn" title="Clear search">×</a>`, clearURL))
 	}
-	
+
 	html.WriteString(`</div>`)
 	html.WriteString(`</form>`)
-	html.WriteString(`</div>`)
 
 	return html.String()
 }
@@ -536,50 +525,264 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		cssClasses = append(cssClasses, "table-bordered")
 	}
 
-	// Enhanced HTML template with pagination and sorting support
+	// Enhanced HTML template with modern styling to match the design
 	htmlTemplate := `
 <div class="table-container">
-{{if .ShowSearch}}{{.SearchHTML}}{{end}}
-<div class="d-flex justify-content-between align-items-center mb-2">
-	<div>{{if .ShowPageSizer}}{{.PageSizerHTML}}{{end}}</div>
-	<div>{{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}</div>
-</div>
-<table class="{{.CSSClasses}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Style}} style="{{.Style}}"{{end}}>
-	<thead>
-		<tr>
-			{{range $index, $header := .Headers}}
-			<th>
-				{{if $.SortingEnabled}}
-					<a href="{{index $.SortLinks $index}}" style="text-decoration: none; color: inherit;">
+	<style>
+		.table-container {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+			background: #ffffff;
+			border-radius: 8px;
+			box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+			overflow: hidden;
+		}
+		
+		.table-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 1rem;
+			background: #f8f9fa;
+			border-bottom: 1px solid #dee2e6;
+		}
+		
+		.page-size-control {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			font-size: 0.875rem;
+			color: #6c757d;
+		}
+		
+		.page-size-control select {
+			padding: 0.375rem 0.75rem;
+			border: 1px solid #ced4da;
+			border-radius: 4px;
+			background: white;
+			font-size: 0.875rem;
+			min-width: 100px;
+		}
+		
+		.search-control {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+		}
+		
+		.search-control label {
+			font-size: 0.875rem;
+			color: #6c757d;
+			margin: 0;
+		}
+		
+		.search-input-group {
+			display: flex;
+			align-items: center;
+			position: relative;
+		}
+		
+		.search-input-group input {
+			padding: 0.5rem 0.75rem;
+			border: 1px solid #ced4da;
+			border-radius: 4px;
+			font-size: 0.875rem;
+			min-width: 200px;
+			outline: none;
+		}
+		
+		.search-input-group input:focus {
+			border-color: #80bdff;
+			box-shadow: 0 0 0 0.2rem rgba(0,123,255,0.25);
+		}
+		
+		.search-clear-btn {
+			margin-left: 0.5rem;
+			padding: 0.5rem;
+			background: #dc3545;
+			color: white;
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 0.75rem;
+		}
+		
+		.data-table {
+			width: 100%;
+			border-collapse: collapse;
+			margin: 0;
+			background: white;
+		}
+		
+		.data-table thead th {
+			background: #f8f9fa;
+			font-weight: 600;
+			padding: 0.75rem;
+			text-align: left;
+			border-bottom: 2px solid #dee2e6;
+			color: #495057;
+			font-size: 0.875rem;
+		}
+		
+		.data-table tbody td {
+			padding: 0.75rem;
+			border-bottom: 1px solid #dee2e6;
+			color: #212529;
+			font-size: 0.875rem;
+		}
+		
+		.data-table tbody tr:nth-child(even) {
+			background-color: #f8f9fa;
+		}
+		
+		.data-table tbody tr:hover {
+			background-color: #e9ecef;
+		}
+		
+		.sort-link {
+			color: inherit;
+			text-decoration: none;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			width: 100%;
+		}
+		
+		.sort-link:hover {
+			color: #495057;
+		}
+		
+		.sort-icon {
+			font-size: 0.75rem;
+			margin-left: 0.5rem;
+			opacity: 0.6;
+		}
+		
+		.sort-icon.active {
+			opacity: 1;
+			color: #007bff;
+		}
+		
+		.table-footer {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 1rem;
+			background: #f8f9fa;
+			border-top: 1px solid #dee2e6;
+		}
+		
+		.pagination-info {
+			font-size: 0.875rem;
+			color: #6c757d;
+			margin: 0;
+		}
+		
+		.pagination {
+			display: flex;
+			list-style: none;
+			margin: 0;
+			padding: 0;
+			gap: 0.25rem;
+		}
+		
+		.pagination .page-item {
+			display: block;
+		}
+		
+		.pagination .page-link {
+			display: block;
+			padding: 0.5rem 0.75rem;
+			color: #007bff;
+			text-decoration: none;
+			border: 1px solid #dee2e6;
+			border-radius: 4px;
+			font-size: 0.875rem;
+		}
+		
+		.pagination .page-link:hover {
+			background-color: #e9ecef;
+			border-color: #adb5bd;
+		}
+		
+		.pagination .page-item.active .page-link {
+			background-color: #007bff;
+			border-color: #007bff;
+			color: white;
+		}
+		
+		.pagination .page-item.disabled .page-link {
+			color: #6c757d;
+			background-color: white;
+			border-color: #dee2e6;
+			cursor: not-allowed;
+		}
+		
+		.no-results {
+			text-align: center;
+			padding: 2rem;
+			color: #6c757d;
+			font-style: italic;
+		}
+	</style>
+	
+	<div class="table-header">
+		<div class="page-size-control">
+			{{if .ShowPageSizer}}
+				<label>Show:</label>
+				{{.PageSizerHTML}}
+			{{end}}
+		</div>
+		<div class="search-control">
+			{{if .ShowSearch}}
+				{{.SearchHTML}}
+			{{end}}
+		</div>
+	</div>
+	
+	{{if gt (len .Rows) 0}}
+	<table class="data-table">
+		<thead>
+			<tr>
+				{{range $index, $header := .Headers}}
+				<th>
+					{{if $.SortingEnabled}}
+						<a href="{{index $.SortLinks $index}}" class="sort-link">
+							<span>{{$header}}</span>
+							<span class="sort-icon{{if eq $.CurrentSortBy $header}} active{{end}}">
+								{{if eq $.CurrentSortBy $header}}
+									{{if eq $.CurrentSortOrder "asc"}}▲{{else}}▼{{end}}
+								{{else}}⬍{{end}}
+							</span>
+						</a>
+					{{else}}
 						{{$header}}
-						{{if eq $.CurrentSortBy $header}}
-							{{if eq $.CurrentSortOrder "asc"}}
-								<span style="font-size: 0.8em;">▲</span>
-							{{else}}
-								<span style="font-size: 0.8em;">▼</span>
-							{{end}}
-						{{else}}
-							<span style="font-size: 0.8em; color: #ccc;">⬍</span>
-						{{end}}
-					</a>
-				{{else}}
-					{{$header}}
+					{{end}}
+				</th>
 				{{end}}
-			</th>
+			</tr>
+		</thead>
+		<tbody>
+			{{range .Rows}}
+			<tr>
+				{{range .}}
+				<td>{{.}}</td>
+				{{end}}
+			</tr>
 			{{end}}
-		</tr>
-	</thead>
-	<tbody>
-		{{range .Rows}}
-		<tr>
-			{{range .}}
-			<td>{{.}}</td>
-			{{end}}
-		</tr>
-		{{end}}
-	</tbody>
-</table>
-{{if .ShowPaginationControls}}{{.PaginationControls}}{{end}}
+		</tbody>
+	</table>
+	{{else}}
+	<div class="no-results">No records found</div>
+	{{end}}
+	
+	<div class="table-footer">
+		<div class="pagination-info">
+			{{if .ShowPaginationInfo}}{{.PaginationInfo}}{{end}}
+		</div>
+		<div class="pagination-controls">
+			{{if .ShowPaginationControls}}{{.PaginationControls}}{{end}}
+		</div>
+	</div>
 </div>`
 
 	tmpl, err := template.New("table").Parse(htmlTemplate)
@@ -661,7 +864,7 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 		sortingEnabled = true
 		currentSortBy = data.Options.Sorting.SortBy
 		currentSortOrder = data.Options.Sorting.SortOrder
-		
+
 		// Parse current query parameters to preserve them in sorting links
 		currentParams := r.parseQueryParams(data.Options.Sorting.BaseURL)
 		if data.Options.Pagination != nil && data.Options.Pagination.Enabled {
@@ -680,7 +883,7 @@ func (r *Renderer) RenderHTML(data DatabasePaginatedData) (string, error) {
 			}
 			currentParams[searchParam] = data.Options.Search.SearchTerm
 		}
-		
+
 		sortLinks = r.generateSortLinks(headers, data.Options.Sorting, currentParams)
 	} else {
 		// Create empty sort links for non-sortable tables
@@ -871,9 +1074,9 @@ func CreatePaginatedDataWithSorting(data interface{}, totalCount int, baseURL st
 				CurrentPage:     currentPage,
 				ShowControls:    true,
 				ShowInfo:        true,
-				ShowPageSizer:   true,                          // Enable page size control
-				PageSizeOptions: []int{10, 25, 50, 100},      // Default page size options
-				BaseURL:         baseURL, // Use base URL without query params for pagination
+				ShowPageSizer:   true,                   // Enable page size control
+				PageSizeOptions: []int{10, 25, 50, 100}, // Default page size options
+				BaseURL:         baseURL,                // Use base URL without query params for pagination
 				QueryParam:      "page",
 				PreserveQuery:   true,
 				TotalCount:      totalCount, // Important: set total count for database pagination
@@ -913,9 +1116,9 @@ func CreatePaginatedDataWithSortingAndSearch(data interface{}, totalCount int, b
 				CurrentPage:     currentPage,
 				ShowControls:    true,
 				ShowInfo:        true,
-				ShowPageSizer:   true,                          // Enable page size control
-				PageSizeOptions: []int{10, 25, 50, 100},      // Default page size options
-				BaseURL:         baseURL, // Use base URL without query params for pagination
+				ShowPageSizer:   true,                   // Enable page size control
+				PageSizeOptions: []int{10, 25, 50, 100}, // Default page size options
+				BaseURL:         baseURL,                // Use base URL without query params for pagination
 				QueryParam:      "page",
 				PreserveQuery:   true,
 				TotalCount:      totalCount, // Important: set total count for database pagination
@@ -995,18 +1198,18 @@ func (r *Renderer) generateSortLinks(headers []string, sorting *Sorting, current
 
 		// Build parameters list preserving existing ones (except page - sorting resets to page 1)
 		params := make([]string, 0)
-		
+
 		// Add sorting parameters
 		params = append(params, fmt.Sprintf("%s=%s", sortParam, header))
 		params = append(params, fmt.Sprintf("%s=%s", orderParam, sortOrder))
-		
+
 		// Add other preserved parameters but exclude page and sort params
 		for key, value := range currentQueryParams {
 			if key != sortParam && key != orderParam && key != "page" { // Exclude page to reset pagination
 				params = append(params, fmt.Sprintf("%s=%s", key, value))
 			}
 		}
-		
+
 		queryString := strings.Join(params, "&")
 
 		// Generate URL for this column
@@ -1025,11 +1228,11 @@ func (r *Renderer) generateSortLinks(headers []string, sorting *Sorting, current
 // parseQueryParams extracts query parameters from a URL or query string
 func (r *Renderer) parseQueryParams(urlOrQuery string) map[string]string {
 	params := make(map[string]string)
-	
+
 	if urlOrQuery == "" {
 		return params
 	}
-	
+
 	// Extract query part if it's a full URL
 	queryString := urlOrQuery
 	if strings.Contains(urlOrQuery, "?") {
@@ -1038,14 +1241,14 @@ func (r *Renderer) parseQueryParams(urlOrQuery string) map[string]string {
 			queryString = parts[1]
 		}
 	}
-	
+
 	// Remove leading '?' if present
 	queryString = strings.TrimPrefix(queryString, "?")
-	
+
 	if queryString == "" {
 		return params
 	}
-	
+
 	// Split by '&' to get individual parameters
 	pairs := strings.Split(queryString, "&")
 	for _, pair := range pairs {
@@ -1056,7 +1259,7 @@ func (r *Renderer) parseQueryParams(urlOrQuery string) map[string]string {
 			}
 		}
 	}
-	
+
 	return params
 }
 
